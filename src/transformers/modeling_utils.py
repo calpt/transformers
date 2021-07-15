@@ -18,6 +18,7 @@ import inspect
 import os
 import re
 import warnings
+from collections import OrderedDict
 from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple, Union
@@ -25,6 +26,7 @@ from typing import Any, Callable, Dict, List, Optional, Set, Tuple, Union
 import torch
 from torch import Tensor, device, nn
 from torch.nn import CrossEntropyLoss
+from torch.utils.hooks import RemovableHandle
 
 from .activations import get_activation
 from .configuration_utils import PretrainedConfig
@@ -409,7 +411,65 @@ class ModuleUtilsMixin:
         return 6 * self.estimate_tokens(input_dict) * self.num_parameters(exclude_embeddings=exclude_embeddings)
 
 
-class PreTrainedModel(nn.Module, ModuleUtilsMixin, GenerationMixin, PushToHubMixin):
+class HookableModelMixin:
+    """
+    A common interface for hooking into the forward pass of a model.
+    """
+
+    def _get_post_embedding_hooks(self) -> OrderedDict:
+        base_model = getattr(self, self.base_model_prefix, self)
+        if base_model is not self:
+            return base_model._get_post_embedding_hooks()
+        else:
+            raise NotImplementedError()
+
+    def _get_post_layer_hooks(self) -> OrderedDict:
+        base_model = getattr(self, self.base_model_prefix, self)
+        if base_model is not self:
+            return base_model._get_post_layer_hooks()
+        else:
+            raise NotImplementedError()
+
+    def _get_self_attn_ln_hooks(self, layer_id: int) -> OrderedDict:
+        base_model = getattr(self, self.base_model_prefix, self)
+        if base_model is not self:
+            return base_model._get_self_attn_ln_hooks(layer_id)
+        else:
+            raise NotImplementedError()
+
+    def _get_final_ln_hooks(self, layer_id: int) -> OrderedDict:
+        base_model = getattr(self, self.base_model_prefix, self)
+        if base_model is not self:
+            return base_model._get_final_ln_hooks(layer_id)
+        else:
+            raise NotImplementedError()
+
+    def register_post_embedding_hook(self, hook: Callable) -> RemovableHandle:
+        hooks = self._get_post_embedding_hooks()
+        handle = RemovableHandle(hooks)
+        hooks[handle.id] = hook
+        return handle
+
+    def register_post_layer_hook(self, hook: Callable) -> RemovableHandle:
+        hooks = self._get_post_layer_hooks()
+        handle = RemovableHandle(hooks)
+        hooks[handle.id] = hook
+        return handle
+
+    def register_self_attn_ln_hook(self, layer_id: int, hook: Callable) -> RemovableHandle:
+        hooks = self._get_self_attn_ln_hooks(layer_id)
+        handle = RemovableHandle(hooks)
+        hooks[handle.id] = hook
+        return handle
+
+    def register_final_ln_hook(self, layer_id: int, hook: Callable) -> RemovableHandle:
+        hooks = self._get_final_ln_hooks(layer_id)
+        handle = RemovableHandle(hooks)
+        hooks[handle.id] = hook
+        return handle
+
+
+class PreTrainedModel(nn.Module, HookableModelMixin, ModuleUtilsMixin, GenerationMixin, PushToHubMixin):
     r"""
     Base class for all models.
 

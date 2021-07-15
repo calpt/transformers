@@ -19,6 +19,7 @@
 import math
 import os
 import warnings
+from collections import OrderedDict
 from dataclasses import dataclass
 from typing import Optional, Tuple
 
@@ -355,11 +356,16 @@ class BertSelfOutput(nn.Module):
         self.dense = nn.Linear(config.hidden_size, config.hidden_size)
         self.LayerNorm = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps)
         self.dropout = nn.Dropout(config.hidden_dropout_prob)
+        self.ln_hooks = OrderedDict()
 
     def forward(self, hidden_states, input_tensor):
         hidden_states = self.dense(hidden_states)
         hidden_states = self.dropout(hidden_states)
-        hidden_states = self.LayerNorm(hidden_states + input_tensor)
+        if self.ln_hooks:
+            for hook in self.ln_hooks.values():
+                hidden_states = hook(hidden_states, input_tensor, self.LayerNorm)
+        else:
+            hidden_states = self.LayerNorm(hidden_states + input_tensor)
         return hidden_states
 
 
@@ -433,11 +439,16 @@ class BertOutput(nn.Module):
         self.dense = nn.Linear(config.intermediate_size, config.hidden_size)
         self.LayerNorm = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps)
         self.dropout = nn.Dropout(config.hidden_dropout_prob)
+        self.ln_hooks = OrderedDict()
 
     def forward(self, hidden_states, input_tensor):
         hidden_states = self.dense(hidden_states)
         hidden_states = self.dropout(hidden_states)
-        hidden_states = self.LayerNorm(hidden_states + input_tensor)
+        if self.ln_hooks:
+            for hook in self.ln_hooks.values():
+                hidden_states = hook(hidden_states, input_tensor, self.LayerNorm)
+        else:
+            hidden_states = self.LayerNorm(hidden_states + input_tensor)
         return hidden_states
 
 
@@ -529,6 +540,7 @@ class BertEncoder(nn.Module):
         super().__init__()
         self.config = config
         self.layer = nn.ModuleList([BertLayer(config) for _ in range(config.num_hidden_layers)])
+        self.post_layer_hooks = OrderedDict()
 
     def forward(
         self,
@@ -590,6 +602,9 @@ class BertEncoder(nn.Module):
                 )
 
             hidden_states = layer_outputs[0]
+            if self.post_layer_hooks:
+                for hook in self.post_layer_hooks.values():
+                    hidden_states, attention_mask = hook(i, hidden_states, attention_mask)
             if use_cache:
                 next_decoder_cache += (layer_outputs[-1],)
             if output_attentions:
@@ -858,6 +873,7 @@ class BertModel(BertPreTrainedModel):
         self.config = config
 
         self.embeddings = BertEmbeddings(config)
+        self.post_embedding_hooks = OrderedDict()
         self.encoder = BertEncoder(config)
 
         self.pooler = BertPooler(config) if add_pooling_layer else None
@@ -877,6 +893,18 @@ class BertModel(BertPreTrainedModel):
         """
         for layer, heads in heads_to_prune.items():
             self.encoder.layer[layer].attention.prune_heads(heads)
+
+    def _get_post_embedding_hooks(self) -> OrderedDict:
+        return self.post_embedding_hooks
+
+    def _get_post_layer_hooks(self) -> OrderedDict:
+        return self.encoder.post_layer_hooks
+
+    def _get_self_attn_ln_hooks(self, layer_id: int) -> OrderedDict:
+        return self.encoder.layer[layer_id].attention.output.ln_hooks
+
+    def _get_final_ln_hooks(self, layer_id: int) -> OrderedDict:
+        return self.encoder.layer[layer_id].output.ln_hooks
 
     @add_start_docstrings_to_model_forward(BERT_INPUTS_DOCSTRING.format("batch_size, sequence_length"))
     @add_code_sample_docstrings(
@@ -988,6 +1016,9 @@ class BertModel(BertPreTrainedModel):
             inputs_embeds=inputs_embeds,
             past_key_values_length=past_key_values_length,
         )
+        if self.post_embedding_hooks:
+            for hook in self.post_embedding_hooks.values():
+                embedding_output = hook(embedding_output)
         encoder_outputs = self.encoder(
             embedding_output,
             attention_mask=extended_attention_mask,

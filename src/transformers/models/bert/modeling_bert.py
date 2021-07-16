@@ -894,16 +894,22 @@ class BertModel(BertPreTrainedModel):
         for layer, heads in heads_to_prune.items():
             self.encoder.layer[layer].attention.prune_heads(heads)
 
-    def _get_post_embedding_hooks(self) -> OrderedDict:
+    def _get_post_embedding_hooks(self) -> Optional[OrderedDict]:
         return self.post_embedding_hooks
 
-    def _get_post_layer_hooks(self) -> OrderedDict:
+    def _get_post_layer_hooks(self) -> Optional[OrderedDict]:
         return self.encoder.post_layer_hooks
 
-    def _get_self_attn_ln_hooks(self, layer_id: int) -> OrderedDict:
+    def _get_self_attn_ln_hooks(self, layer_id: int) -> Optional[OrderedDict]:
         return self.encoder.layer[layer_id].attention.output.ln_hooks
 
-    def _get_final_ln_hooks(self, layer_id: int) -> OrderedDict:
+    def _get_cross_attn_ln_hooks(self, layer_id: int) -> Optional[OrderedDict]:
+        if self.config.add_crossattention:
+            return self.encoder.layer[layer_id].crossattention.output.ln_hooks
+        else:
+            return None
+
+    def _get_final_ln_hooks(self, layer_id: int) -> Optional[OrderedDict]:
         return self.encoder.layer[layer_id].output.ln_hooks
 
     @add_start_docstrings_to_model_forward(BERT_INPUTS_DOCSTRING.format("batch_size, sequence_length"))

@@ -416,28 +416,35 @@ class HookableModelMixin:
     A common interface for hooking into the forward pass of a model.
     """
 
-    def _get_post_embedding_hooks(self) -> OrderedDict:
+    def _get_post_embedding_hooks(self) -> Optional[OrderedDict]:
         base_model = getattr(self, self.base_model_prefix, self)
         if base_model is not self:
             return base_model._get_post_embedding_hooks()
         else:
             raise NotImplementedError()
 
-    def _get_post_layer_hooks(self) -> OrderedDict:
+    def _get_post_layer_hooks(self) -> Optional[OrderedDict]:
         base_model = getattr(self, self.base_model_prefix, self)
         if base_model is not self:
             return base_model._get_post_layer_hooks()
         else:
             raise NotImplementedError()
 
-    def _get_self_attn_ln_hooks(self, layer_id: int) -> OrderedDict:
+    def _get_self_attn_ln_hooks(self, layer_id: int) -> Optional[OrderedDict]:
         base_model = getattr(self, self.base_model_prefix, self)
         if base_model is not self:
             return base_model._get_self_attn_ln_hooks(layer_id)
         else:
             raise NotImplementedError()
 
-    def _get_final_ln_hooks(self, layer_id: int) -> OrderedDict:
+    def _get_cross_attn_ln_hooks(self, layer_id: int) -> Optional[OrderedDict]:
+        base_model = getattr(self, self.base_model_prefix, self)
+        if base_model is not self:
+            return base_model._get_cross_attn_ln_hooks(layer_id)
+        else:
+            raise NotImplementedError()
+
+    def _get_final_ln_hooks(self, layer_id: int) -> Optional[OrderedDict]:
         base_model = getattr(self, self.base_model_prefix, self)
         if base_model is not self:
             return base_model._get_final_ln_hooks(layer_id)
@@ -446,27 +453,48 @@ class HookableModelMixin:
 
     def register_post_embedding_hook(self, hook: Callable) -> RemovableHandle:
         hooks = self._get_post_embedding_hooks()
-        handle = RemovableHandle(hooks)
-        hooks[handle.id] = hook
-        return handle
+        if hooks is not None:
+            handle = RemovableHandle(hooks)
+            hooks[handle.id] = hook
+            return handle
+        else:
+            return None
 
     def register_post_layer_hook(self, hook: Callable) -> RemovableHandle:
         hooks = self._get_post_layer_hooks()
-        handle = RemovableHandle(hooks)
-        hooks[handle.id] = hook
-        return handle
+        if hooks is not None:
+            handle = RemovableHandle(hooks)
+            hooks[handle.id] = hook
+            return handle
+        else:
+            return None
 
     def register_self_attn_ln_hook(self, layer_id: int, hook: Callable) -> RemovableHandle:
         hooks = self._get_self_attn_ln_hooks(layer_id)
-        handle = RemovableHandle(hooks)
-        hooks[handle.id] = hook
-        return handle
+        if hooks is not None:
+            handle = RemovableHandle(hooks)
+            hooks[handle.id] = hook
+            return handle
+        else:
+            return None
+
+    def register_cross_attn_ln_hook(self, layer_id: int, hook: Callable) -> RemovableHandle:
+        hooks = self._get_cross_attn_ln_hooks(layer_id)
+        if hooks is not None:
+            handle = RemovableHandle(hooks)
+            hooks[handle.id] = hook
+            return handle
+        else:
+            return None
 
     def register_final_ln_hook(self, layer_id: int, hook: Callable) -> RemovableHandle:
         hooks = self._get_final_ln_hooks(layer_id)
-        handle = RemovableHandle(hooks)
-        hooks[handle.id] = hook
-        return handle
+        if hooks is not None:
+            handle = RemovableHandle(hooks)
+            hooks[handle.id] = hook
+            return handle
+        else:
+            return None
 
 
 class PreTrainedModel(nn.Module, HookableModelMixin, ModuleUtilsMixin, GenerationMixin, PushToHubMixin):

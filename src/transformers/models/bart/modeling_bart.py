@@ -17,6 +17,7 @@ import copy
 import math
 import random
 import warnings
+from collections import OrderedDict
 from typing import Optional, Tuple
 
 import torch
@@ -277,6 +278,9 @@ class BartEncoderLayer(nn.Module):
         self.fc2 = nn.Linear(config.encoder_ffn_dim, self.embed_dim)
         self.final_layer_norm = nn.LayerNorm(self.embed_dim)
 
+        self.self_attn_ln_hooks = OrderedDict()
+        self.final_ln_hooks = OrderedDict()
+
     def forward(
         self,
         hidden_states: torch.Tensor,
@@ -303,16 +307,24 @@ class BartEncoderLayer(nn.Module):
             output_attentions=output_attentions,
         )
         hidden_states = nn.functional.dropout(hidden_states, p=self.dropout, training=self.training)
-        hidden_states = residual + hidden_states
-        hidden_states = self.self_attn_layer_norm(hidden_states)
+        if self.self_attn_ln_hooks:
+            for hook in self.self_attn_ln_hooks.values():
+                hidden_states = hook(hidden_states, residual, self.self_attn_layer_norm)
+        else:
+            hidden_states = residual + hidden_states
+            hidden_states = self.self_attn_layer_norm(hidden_states)
 
         residual = hidden_states
         hidden_states = self.activation_fn(self.fc1(hidden_states))
         hidden_states = nn.functional.dropout(hidden_states, p=self.activation_dropout, training=self.training)
         hidden_states = self.fc2(hidden_states)
         hidden_states = nn.functional.dropout(hidden_states, p=self.dropout, training=self.training)
-        hidden_states = residual + hidden_states
-        hidden_states = self.final_layer_norm(hidden_states)
+        if self.final_ln_hooks:
+            for hook in self.final_ln_hooks.values():
+                hidden_states = hook(hidden_states, residual, self.final_layer_norm)
+        else:
+            hidden_states = residual + hidden_states
+            hidden_states = self.final_layer_norm(hidden_states)
 
         if hidden_states.dtype == torch.float16 and (
             torch.isinf(hidden_states).any() or torch.isnan(hidden_states).any()
@@ -354,6 +366,10 @@ class BartDecoderLayer(nn.Module):
         self.fc1 = nn.Linear(self.embed_dim, config.decoder_ffn_dim)
         self.fc2 = nn.Linear(config.decoder_ffn_dim, self.embed_dim)
         self.final_layer_norm = nn.LayerNorm(self.embed_dim)
+
+        self.self_attn_ln_hooks = OrderedDict()
+        self.cross_attn_ln_hooks = OrderedDict()
+        self.final_ln_hooks = OrderedDict()
 
     def forward(
         self,
@@ -398,8 +414,12 @@ class BartDecoderLayer(nn.Module):
             output_attentions=output_attentions,
         )
         hidden_states = nn.functional.dropout(hidden_states, p=self.dropout, training=self.training)
-        hidden_states = residual + hidden_states
-        hidden_states = self.self_attn_layer_norm(hidden_states)
+        if self.self_attn_ln_hooks:
+            for hook in self.self_attn_ln_hooks.values():
+                hidden_states = hook(hidden_states, residual, self.self_attn_layer_norm)
+        else:
+            hidden_states = residual + hidden_states
+            hidden_states = self.self_attn_layer_norm(hidden_states)
 
         # Cross-Attention Block
         cross_attn_present_key_value = None
@@ -418,8 +438,12 @@ class BartDecoderLayer(nn.Module):
                 output_attentions=output_attentions,
             )
             hidden_states = nn.functional.dropout(hidden_states, p=self.dropout, training=self.training)
-            hidden_states = residual + hidden_states
-            hidden_states = self.encoder_attn_layer_norm(hidden_states)
+            if self.cross_attn_ln_hooks:
+                for hook in self.cross_attn_ln_hooks.values():
+                    hidden_states = hook(hidden_states, residual, self.encoder_attn_layer_norm)
+            else:
+                hidden_states = residual + hidden_states
+                hidden_states = self.encoder_attn_layer_norm(hidden_states)
 
             # add cross-attn to positions 3,4 of present_key_value tuple
             present_key_value = present_key_value + cross_attn_present_key_value
@@ -430,8 +454,12 @@ class BartDecoderLayer(nn.Module):
         hidden_states = nn.functional.dropout(hidden_states, p=self.activation_dropout, training=self.training)
         hidden_states = self.fc2(hidden_states)
         hidden_states = nn.functional.dropout(hidden_states, p=self.dropout, training=self.training)
-        hidden_states = residual + hidden_states
-        hidden_states = self.final_layer_norm(hidden_states)
+        if self.final_ln_hooks:
+            for hook in self.final_ln_hooks.values():
+                hidden_states = hook(hidden_states, residual, self.final_layer_norm)
+        else:
+            hidden_states = residual + hidden_states
+            hidden_states = self.final_layer_norm(hidden_states)
 
         outputs = (hidden_states,)
 
@@ -686,6 +714,9 @@ class BartEncoder(BartPretrainedModel):
         self.layers = nn.ModuleList([BartEncoderLayer(config) for _ in range(config.encoder_layers)])
         self.layernorm_embedding = nn.LayerNorm(embed_dim)
 
+        self.post_embedding_hooks = OrderedDict()
+        self.post_layer_hooks = OrderedDict()
+
         self.init_weights()
 
     def forward(
@@ -760,6 +791,9 @@ class BartEncoder(BartPretrainedModel):
         hidden_states = inputs_embeds + embed_pos
         hidden_states = self.layernorm_embedding(hidden_states)
         hidden_states = nn.functional.dropout(hidden_states, p=self.dropout, training=self.training)
+        if self.post_embedding_hooks:
+            for hook in self.post_embedding_hooks.values():
+                hidden_states = hook(hidden_states)
 
         # expand attention_mask
         if attention_mask is not None:
@@ -805,6 +839,9 @@ class BartEncoder(BartPretrainedModel):
                     )
 
                 hidden_states = layer_outputs[0]
+                if self.post_layer_hooks:
+                    for hook in self.post_layer_hooks.values():
+                        hidden_states, attention_mask = hook(idx, hidden_states, attention_mask)
 
             if output_attentions:
                 all_attentions = all_attentions + (layer_outputs[1],)
@@ -847,6 +884,8 @@ class BartDecoder(BartPretrainedModel):
         )
         self.layers = nn.ModuleList([BartDecoderLayer(config) for _ in range(config.decoder_layers)])
         self.layernorm_embedding = nn.LayerNorm(config.d_model)
+
+        self.post_layer_hooks = OrderedDict()
 
         self.init_weights()
 
@@ -1062,6 +1101,9 @@ class BartDecoder(BartPretrainedModel):
                     use_cache=use_cache,
                 )
             hidden_states = layer_outputs[0]
+            if self.post_layer_hooks:
+                for hook in self.post_layer_hooks.values():
+                    hidden_states, attention_mask = hook(idx, hidden_states, attention_mask)
 
             if use_cache:
                 next_decoder_cache += (layer_outputs[3 if output_attentions else 1],)
@@ -1105,6 +1147,8 @@ class BartModel(BartPretrainedModel):
 
         self.encoder = BartEncoder(config, self.shared)
         self.decoder = BartDecoder(config, self.shared)
+        # HACK: bind post_layer_hooks of encoder and decoder
+        self.decoder.post_layer_hooks = self.encoder.post_layer_hooks
 
         self.init_weights()
 
@@ -1121,6 +1165,30 @@ class BartModel(BartPretrainedModel):
 
     def get_decoder(self):
         return self.decoder
+
+    def _get_post_embedding_hooks(self) -> Optional[OrderedDict]:
+        return self.encoder.post_embedding_hooks
+
+    def _get_post_layer_hooks(self) -> Optional[OrderedDict]:
+        return self.encoder.post_layer_hooks
+
+    def _get_self_attn_ln_hooks(self, layer_id: int) -> Optional[OrderedDict]:
+        if layer_id < len(self.encoder.layers):
+            return self.encoder.layers[layer_id].self_attn_ln_hooks
+        else:
+            return self.decoder.layers[layer_id - len(self.encoder.layers)].self_attn_ln_hooks
+
+    def _get_cross_attn_ln_hooks(self, layer_id: int) -> Optional[OrderedDict]:
+        if layer_id < len(self.encoder.layers):
+            return None
+        else:
+            return self.decoder.layers[layer_id - len(self.encoder.layers)].cross_attn_ln_hooks
+
+    def _get_final_ln_hooks(self, layer_id: int) -> Optional[OrderedDict]:
+        if layer_id < len(self.encoder.layers):
+            return self.encoder.layers[layer_id].final_ln_hooks
+        else:
+            return self.decoder.layers[layer_id - len(self.encoder.layers)].final_ln_hooks
 
     @add_start_docstrings_to_model_forward(BART_INPUTS_DOCSTRING)
     @add_code_sample_docstrings(

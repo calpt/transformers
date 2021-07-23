@@ -452,6 +452,9 @@ class HookableModelMixin:
             raise NotImplementedError()
 
     def register_post_embedding_hook(self, hook: Callable) -> RemovableHandle:
+        """
+        Registers a forward hook after the embedding layer of the model.
+        """
         hooks = self._get_post_embedding_hooks()
         if hooks is not None:
             handle = RemovableHandle(hooks)
@@ -461,6 +464,9 @@ class HookableModelMixin:
             return None
 
     def register_post_layer_hook(self, hook: Callable) -> RemovableHandle:
+        """
+        Registers a forward hook after each Transformer layer of the model.
+        """
         hooks = self._get_post_layer_hooks()
         if hooks is not None:
             handle = RemovableHandle(hooks)
@@ -470,6 +476,9 @@ class HookableModelMixin:
             return None
 
     def register_self_attn_ln_hook(self, layer_id: int, hook: Callable) -> RemovableHandle:
+        """
+        Registers a forward hook after the self attention block in the ith layer of the model.
+        """
         hooks = self._get_self_attn_ln_hooks(layer_id)
         if hooks is not None:
             handle = RemovableHandle(hooks)
@@ -479,6 +488,9 @@ class HookableModelMixin:
             return None
 
     def register_cross_attn_ln_hook(self, layer_id: int, hook: Callable) -> RemovableHandle:
+        """
+        Registers a forward hook after the cross attention block in the ith layer of the model.
+        """
         hooks = self._get_cross_attn_ln_hooks(layer_id)
         if hooks is not None:
             handle = RemovableHandle(hooks)
@@ -488,6 +500,9 @@ class HookableModelMixin:
             return None
 
     def register_final_ln_hook(self, layer_id: int, hook: Callable) -> RemovableHandle:
+        """
+        Registers a forward hook after the final feed-forward block in the ith layer of the model.
+        """
         hooks = self._get_final_ln_hooks(layer_id)
         if hooks is not None:
             handle = RemovableHandle(hooks)
